@@ -56,7 +56,7 @@ test_size=0.25
 filters = 16
 kernel_size = 2
 size_mfcc = 40
-max_pad_len = 100
+min_size_file = 2147483646
 
 # reparameterization trick
 # instead of sampling from Q(z|X), sample epsilon = N(0,I)
@@ -125,7 +125,7 @@ def plot_results(models,
     plt.show()
 
 
-def load_data(path, class_label, index_filename ):
+def load_data(path, class_label, index_filename, min_size_file ):
 
     path, dirs, files = next(os.walk(path))
     num_size = len(dirs)
@@ -136,16 +136,31 @@ def load_data(path, class_label, index_filename ):
         for file in files:
             if num_files < dataset_size:
                 if file != ".DS_Store":
+                    file_path = path + file
+                    audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
+                    if len(audio)<min_size_file:
+                        min_size_file=len(audio)
+
+    print("taille du plus petit fichier audio: ", min_size_file)
+
+
+
+
+    for subdir, dirs, files in os.walk(path):
+        for file in files:
+            if num_files < dataset_size:
+                if file != ".DS_Store":
                     # print(os.path.join(subdir, file))
                     #try:
                     file_path= path+file
                     audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
-                    audio = audio[50:100]
+                    audio = audio[:min_size_file]
+
                     mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=40)
                     #print(mfccs)
-                    pad_width = max_pad_len - mfccs.shape[1]
-                    print(pad_width)
-                    mfccs = np.pad(mfccs, pad_width=((0, 0), (0, pad_width)), mode='constant')
+                    #pad_width = max_pad_len - mfccs.shape[1]
+                    #print(pad_width)
+                    #mfccs = np.pad(mfccs, pad_width=((0, 0), (0, pad_width)), mode='constant')
                     print(mfccs.shape)
                     features.append([mfccs, num_files])
                     #except Exception as e:
@@ -158,7 +173,7 @@ def load_data(path, class_label, index_filename ):
 
         current_folder += 1
         print("Done ", num_files, " from ", current_folder, " folders on ", num_size)
-        return True
+        return min_size_file
 
 
 print("LOADING DATA FOR TRAINING...")
@@ -169,7 +184,7 @@ features = []
 #path_to_load = "/home/kyrillos/CODE/VAEMIDI/quantized_rythm_dataset_v2_temperature/100"
 path_to_load = "/Users/Cyril_Musique/Documents/Cours/M2/WAVAE_audio_vae/audio_files/"
 
-load_data(path_to_load,1,  dataset_size)
+min_size_file= load_data(path_to_load,1,  dataset_size, min_size_file)
 
 # Convert into a Panda dataframe
 featuresdf = pd.DataFrame(features, columns=['feature', 'class_label'])
@@ -191,23 +206,23 @@ X_shuffle = shuffle(X, random_state=random_state)
 y_shuffle = shuffle(y, random_state=random_state)
 file_shuffle = shuffle(list_files_name, random_state=random_state)
 
-
-x_train = np.reshape(x_train, [x_train.shape[0], size_mfcc, max_pad_len, 1])
-x_test = np.reshape(x_test, [x_test.shape[0],size_mfcc, max_pad_len, 1])
+print(min_size_file)
+x_train = np.reshape(x_train, [x_train.shape[0], size_mfcc, X.shape[2], 1])
+x_test = np.reshape(x_test, [x_test.shape[0],size_mfcc, X.shape[2], 1])
 
 
 
 #x_train = np.reshape(x_train, [-1, original_dim])
 #x_test = np.reshape(x_test, [-1, original_dim])
-#x_train = x_train.astype('float64') / 100
-#x_test = x_test.astype('float64') / 100
+x_train = x_train.astype('float64') / 10000
+x_test = x_test.astype('float64') / 10000
 
 
 
 #Convolutional VAE
 
 #ENCODER
-input_shape = (size_mfcc, max_pad_len, 1) #datasize
+input_shape = (size_mfcc, X.shape[2], 1) #datasize
 inputs = Input(shape=input_shape, name='encoder_input')
 x = inputs
 for i in range(2):
@@ -274,7 +289,7 @@ else:
     reconstruction_loss = binary_crossentropy(K.flatten(inputs),
                                               K.flatten(outputs))
 
-reconstruction_loss *= size_mfcc * (max_pad_len)
+reconstruction_loss *= size_mfcc * (min_size_file)
 kl_loss = 1 + z_log_var - K.square(z_mean) - K.exp(z_log_var)
 kl_loss = K.sum(kl_loss, axis=-1)
 kl_loss *= -0.5
