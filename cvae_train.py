@@ -18,6 +18,13 @@ import matplotlib.pyplot as plt
 import argparse
 import os
 import librosa.display
+from multiprocessing import Pool, Value
+
+from pathlib import Path
+
+import concurrent.futures
+
+import multiprocessing as mp
 
 import pretty_midi
 from sklearn.model_selection import train_test_split
@@ -28,7 +35,7 @@ from keras.callbacks import EarlyStopping
 
 import librosa
 from scipy.io import wavfile as wav
-
+from pydub import AudioSegment
 
 class CVae:
     def __init__(self):
@@ -50,6 +57,8 @@ class CVae:
         self.kernel_size = 2
         self.size_mfcc = 40
         self.min_size_file = 2147483646
+
+        self.smallest_file = self.get_smallest_file()
 
 
     def sampling(self, args):
@@ -91,14 +100,11 @@ class CVae:
         current_folder = 0
         num_files = 0
 
-        for subdir, dirs, files in os.walk(path):
-            for file in files:
-                if num_files < self.dataset_size:
-                    if file != ".DS_Store":
-                        file_path = path + file
-                        audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
-                        if len(audio)<self.min_size_file:
-                            self.min_size_file=len(audio)
+        audiomin, sample_ratemin = librosa.load(self.smallest_file, res_type='kaiser_fast')
+
+        self.min_size_file=len(audiomin)
+
+
 
         print("taille du plus petit fichier audio: ", self.min_size_file)
 
@@ -107,23 +113,20 @@ class CVae:
                 if num_files < self.dataset_size:
                     if file != ".DS_Store":
                         # print(os.path.join(subdir, file))
-                        #try:
-                        file_path= path+file
-                        audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
-                        audio = audio[:self.min_size_file]
+                        try:
+                            file_path= subdir+"/"+file
+                            audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
+                            #audio = audio[:self.min_size_file]
+                            #audio = audio[:2827]
 
-                        mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=40)
-                        #print(mfccs)
-                        #pad_width = max_pad_len - mfccs.shape[1]
-                        #print(pad_width)
-                        #mfccs = np.pad(mfccs, pad_width=((0, 0), (0, pad_width)), mode='constant')
-                        print(mfccs.shape)
-                        self.features.append([mfccs, num_files])
-                        #except Exception as e:
-                        #    print("Error encountered while parsing file: ", file)
-                        #    return None
+                            mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=40)
 
-                        #return mfccsscaled
+                            print(mfccs.shape)
+                            self.features.append([mfccs, num_files])
+                        except Exception as e:
+                            print("Error encountered while parsing file: ", file)
+                            return None
+
                         self.list_files_name.insert(num_files, file)
                         num_files += 1
 
@@ -274,35 +277,84 @@ class CVae:
 
     def get_smallest_file(self):
 
-        n = 10
 
-        files = os.listdir(self.path_to_load)
-        files_sorted_by_size = sorted(files, key=lambda filename: os.path.getsize(os.path.join(self.path_to_load, filename)))
-        nsmallest_files = files_sorted_by_size[:n]
-        print(nsmallest_files)
+        smallest_file_size=100000000
+        smallest_file=""
+        for subdir, dirs, files in os.walk(self.path_to_load):
+            for file in files:
+                filepath = subdir+"/"+ file
+                #print(filepath, os.path.getsize(filepath) )
+                if os.path.getsize(filepath) <smallest_file_size:
+                    #print(filepath, os.path.getsize(filepath) )
+                    smallest_file = subdir+"/"+file
+                    smallest_file_size = os.path.getsize(filepath)
+        print("Chemin du plus petit fichier audio: ", smallest_file)
+        return smallest_file
+
+
 
     def clear_dataset(self):
 
-        names =["flac", "mp3"]
         for root, dirs, files in os.walk(self.path_to_load):
             for name in files:
                 path = os.path.join(root, name)
                 if os.path.isfile(path):
-                    if not ( name.endswith(".mp3")  or  name.endswith(".flac")) :
+
+                    if os.path.getsize(path) < 250000:
+                        print("removed: ", name)
+                        os.remove(path)  # uncomment this line if you're happy with the set of files to remove
+
+                    if  (name.startswith(".") ):
+                        print("removed: ", name)
+                        os.remove(path)  # uncomment this line if you're happy with the set of files to remove
+
+                    if not ( name.endswith(".mp3") ): #or  name.endswith(".flac")) :
                         print("removed: ", name)
                         os.remove(path) # uncomment this line if you're happy with the set of files to remove
 
+    def cut_audio(self, save_file_name):
 
+        global counter
+        global total_size
+        with counter.get_lock():
+            counter.value += 1
+        print("Done:", counter.value, "/", total_size)
+
+        t2 = 30 * 1000
+        if "mp3" in save_file_name:
+            newAudio = AudioSegment.from_mp3(save_file_name)
+            newAudio = newAudio[:t2]
+            save_file_name.replace(".mp3", "")
+            newAudio.export(save_file_name, format="mp3")
+
+
+    def multiprocessed_audio_cut(self, length):
+        my_files = []
+        for root, dirs, files in os.walk(self.path_to_load):
+            for i in files:
+                my_files.append(os.path.join(root, i))
+
+        #print(my_files)
+        global total_size
+        total_size=len(my_files)
+
+        pool = mp.Pool(min(mp.cpu_count(), len(my_files)))  # number of workers
+        pool.map(self.cut_audio, my_files, chunksize=1)
+        pool.close()
+
+
+counter = Value('i', 0)
+total_size = Value('i', 0)
 if __name__ == '__main__':
 
     vae = CVae()
-    vae.get_smallest_file()
+
+    #CLEAR DATASET
     #vae.clear_dataset()
-
-
-    process_audio = False
+    vae.multiprocessed_audio_cut(30)
 
     '''
+    process_audio = True
     if process_audio:
         vae.load_data()
         vae.process_data()
@@ -313,5 +365,4 @@ if __name__ == '__main__':
         vae.compile()
         vae.train()
         vae.plot_results()
-
     '''
