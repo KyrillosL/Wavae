@@ -42,14 +42,14 @@ class CVae:
 
         self.file_to_write_X = "/home/kyrillos/CODE/Wavae/audios/data_X"
         self.file_to_write_y = "/home/kyrillos/CODE/Wavae/audios/data_y"
-        self.path_to_load = "/home/kyrillos/CODE/Wavae/audios/amusique/"
+        self.path_to_load = "/home/kyrillos/CODE/Wavae/audios/totry/"
 
         self.intermediate_dim = 128
-        self.batch_size = 1
-        self.latent_dim = 2
+        self.batch_size = 2
+        self.latent_dim = 4
         self.epochs = 100
         self.random_state = 42
-        self.dataset_size = 10000
+        self.dataset_size = 500
         self.list_files_name= []
         self.file_shuffle=[]
         self.test_size=0.25
@@ -58,7 +58,7 @@ class CVae:
         self.size_mfcc = 40
         self.min_size_file = 2147483646
 
-        self.smallest_file = self.get_smallest_file()
+
 
 
     def sampling(self, args):
@@ -92,6 +92,12 @@ class CVae:
         plt.show()
 
 
+    def process_size(self):
+        self.smallest_file = self.get_smallest_file()
+        audiomin, sample_ratemin = librosa.load(self.smallest_file, res_type='kaiser_fast')
+        self.min_mfcc_size =librosa.feature.mfcc(y=audiomin, sr=sample_ratemin, n_mfcc=self.size_mfcc).shape[1]
+        self.min_size_file=len(audiomin)
+
     def load_data(self):
         self.features = []
         print("LOADING DATA FOR TRAINING...")
@@ -100,9 +106,6 @@ class CVae:
         current_folder = 0
         num_files = 0
 
-        audiomin, sample_ratemin = librosa.load(self.smallest_file, res_type='kaiser_fast')
-
-        self.min_size_file=len(audiomin)
 
 
 
@@ -113,22 +116,35 @@ class CVae:
                 if num_files < self.dataset_size:
                     if file != ".DS_Store":
                         # print(os.path.join(subdir, file))
-                        try:
-                            file_path= subdir+"/"+file
-                            audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
-                            #audio = audio[:self.min_size_file]
-                            #audio = audio[:2827]
+                        #try:
+                        file_path= subdir+"/"+file
+                        audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
 
-                            mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=40)
+                        if len(audio)>=self.min_size_file:
+                            audio = audio[:self.min_size_file]
+                            #audio = audio[:self.min_mfcc_size]
 
-                            print(mfccs.shape)
-                            self.features.append([mfccs, num_files])
-                        except Exception as e:
-                            print("Error encountered while parsing file: ", file)
-                            return None
 
-                        self.list_files_name.insert(num_files, file)
-                        num_files += 1
+                            mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=self.size_mfcc)
+
+                            classe = 0
+
+                            if "001" in file_path:
+                                #print("van inside")
+                                classe = 1
+
+                            self.features.append([mfccs, classe])
+
+
+                            #except Exception as e:
+                                #print("Error encountered while parsing file: ", file_path)
+                                #return None
+
+
+
+
+                            self.list_files_name.insert(num_files, file)
+                            num_files += 1
 
             current_folder += 1
             print("Done ", num_files, " from ", current_folder, " folders on ", num_size)
@@ -154,19 +170,22 @@ class CVae:
         y_shuffle = shuffle(self.y, random_state=self.random_state)
         self.file_shuffle = shuffle(self.list_files_name, random_state=self.random_state)
 
-        print(self.min_size_file)
+        print("min file size: ", self.min_size_file)
+        print("min mfcc size: ", self.min_mfcc_size)
+        print(self.X.shape, self.y.shape)
         self.x_train = np.reshape(self.x_train, [self.x_train.shape[0], self.size_mfcc, self.X.shape[2], 1])
         self.x_test = np.reshape(self.x_test, [self.x_test.shape[0],self.size_mfcc, self.X.shape[2], 1])
 
-        self.x_train = self.x_train.astype('float64') / 10000
-        self.x_test = self.x_test.astype('float64') / 10000
+        self.x_train = self.x_train.astype('float64') / 100
+        self.x_test = self.x_test.astype('float64') / 100
 
+        print("APRES RESIZE",self.x_train.shape, self.y_train.shape)
 
 
     def compile(self):
 
         #ENCODER
-        input_shape = (self.size_mfcc, self.X.shape[2], 1) #datasize
+        input_shape = (self.X.shape[1], self.X.shape[2], 1) #datasize
         inputs = Input(shape=input_shape, name='encoder_input')
         x = inputs
         for i in range(2):
@@ -233,7 +252,7 @@ class CVae:
             reconstruction_loss = binary_crossentropy(K.flatten(inputs),
                                                       K.flatten(outputs))
 
-        reconstruction_loss *= self.size_mfcc * (self.min_size_file)
+        reconstruction_loss *= self.size_mfcc * (self.min_mfcc_size)
         kl_loss = 1 + z_log_var - K.square(z_mean) - K.exp(z_log_var)
         kl_loss = K.sum(kl_loss, axis=-1)
         kl_loss *= -0.5
@@ -308,9 +327,9 @@ class CVae:
                         print("removed: ", name)
                         os.remove(path)  # uncomment this line if you're happy with the set of files to remove
 
-                    if not ( name.endswith(".mp3") ): #or  name.endswith(".flac")) :
+                    if not ( name.endswith(".mp3") or  name.endswith(".flac")) :
                         print("removed: ", name)
-                        os.remove(path) # uncomment this line if you're happy with the set of files to remove
+                        #os.remove(path) # uncomment this line if you're happy with the set of files to remove
 
     def cut_audio(self, save_file_name):
 
@@ -326,6 +345,11 @@ class CVae:
             newAudio = newAudio[:t2]
             save_file_name.replace(".mp3", "")
             newAudio.export(save_file_name, format="mp3")
+        if "flac" in save_file_name:
+            newAudio = AudioSegment.from_file(save_file_name)
+            newAudio = newAudio[:t2]
+            save_file_name.replace(".flac", "")
+            newAudio.export(save_file_name, format="flac")
 
 
     def multiprocessed_audio_cut(self, length):
@@ -351,18 +375,19 @@ if __name__ == '__main__':
 
     #CLEAR DATASET
     #vae.clear_dataset()
-    vae.multiprocessed_audio_cut(30)
+    #vae.multiprocessed_audio_cut(30)
 
-    '''
-    process_audio = True
+
+    process_audio = False
     if process_audio:
+        vae.process_size()
         vae.load_data()
         vae.process_data()
         vae.save_array_data()
     else:
         vae.load_array_data()
+        vae.process_size()
         vae.split_data()
         vae.compile()
         vae.train()
         vae.plot_results()
-    '''
