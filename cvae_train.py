@@ -37,26 +37,31 @@ import librosa
 from scipy.io import wavfile as wav
 from pydub import AudioSegment
 
+
+import itertools
+from multiprocessing import Pool #  Process pool
+from multiprocessing import sharedctypes
+
 class CVae:
     def __init__(self):
 
         self.file_to_write_X = "/home/kyrillos/CODE/Wavae/audios/data_X"
         self.file_to_write_y = "/home/kyrillos/CODE/Wavae/audios/data_y"
-        self.path_to_load = "/home/kyrillos/CODE/Wavae/audios/totry/"
+        self.path_to_load = "/home/kyrillos/CODE/Wavae/audios/amusique/"
 
-        self.intermediate_dim = 128
-        self.batch_size = 2
-        self.latent_dim = 4
+        self.intermediate_dim = 256
+        self.batch_size = 1
+        self.latent_dim = 2
         self.epochs = 100
         self.random_state = 42
-        self.dataset_size = 500
+        self.dataset_size = 10000
         self.list_files_name= []
         self.file_shuffle=[]
-        self.test_size=0.25
+        self.test_size=0.1
         self.filters = 16
         self.kernel_size = 2
         self.size_mfcc = 40
-        self.min_size_file = 2147483646
+        self.min_size_file = 350000 #DOIT ETRE UN MULTIPLE DE 4 APRES MFCC
 
 
 
@@ -93,10 +98,43 @@ class CVae:
 
 
     def process_size(self):
+        print("processing")
         self.smallest_file = self.get_smallest_file()
         audiomin, sample_ratemin = librosa.load(self.smallest_file, res_type='kaiser_fast')
+
+        self.min_size_file = 350000
+        audiomin= audiomin[:self.min_size_file]
+
+
+        print("Sample rate min : ", sample_ratemin)
+
         self.min_mfcc_size =librosa.feature.mfcc(y=audiomin, sr=sample_ratemin, n_mfcc=self.size_mfcc).shape[1]
-        self.min_size_file=len(audiomin)
+
+        #self.min_size_file=len(audiomin)
+
+        #self.min_size_file = round(self.min_size_file/10000, 0)
+        #self.min_size_file *=10000
+        #self.min_size_file = int(self.min_size_file)
+
+
+
+    def mp_load_data(self):
+
+        size = 100
+        self.block_size = 4
+
+
+        #self.shared_array = sharedctypes.RawArray(self.result._type_, result)
+
+        window_idxs = [(i, j) for i, j in
+                       itertools.product(range(0, size, self.block_size),
+                                         range(0, size, self.block_size))]
+
+        p = Pool()
+        res = p.map(load_data, window_idxs)
+        result = np.ctypeslib.as_array(self.shared_array)
+
+
 
     def load_data(self):
         self.features = []
@@ -105,10 +143,6 @@ class CVae:
         num_size = len(dirs)
         current_folder = 0
         num_files = 0
-
-
-
-
         print("taille du plus petit fichier audio: ", self.min_size_file)
 
         for subdir, dirs, files in os.walk(path):
@@ -121,6 +155,7 @@ class CVae:
                         audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
 
                         if len(audio)>=self.min_size_file:
+                            #print(self.min_size_file)
                             audio = audio[:self.min_size_file]
                             #audio = audio[:self.min_mfcc_size]
 
@@ -129,7 +164,7 @@ class CVae:
 
                             classe = 0
 
-                            if "001" in file_path:
+                            if "van" in file_path:
                                 #print("van inside")
                                 classe = 1
 
@@ -148,6 +183,22 @@ class CVae:
 
             current_folder += 1
             print("Done ", num_files, " from ", current_folder, " folders on ", num_size)
+
+    def load_data_for_eval(self, file_path):
+        self.features = []
+
+        print("taille du plus petit fichier audio: ", self.min_size_file)
+
+        audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
+        if len(audio)>=self.min_size_file:
+            audio = audio[:self.min_size_file]
+            mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=self.size_mfcc)
+            classe = 0
+            if "van" in file_path:
+                classe = 1
+            self.features.append([mfccs, classe])
+
+
 
 
     def process_data(self):
@@ -252,7 +303,7 @@ class CVae:
             reconstruction_loss = binary_crossentropy(K.flatten(inputs),
                                                       K.flatten(outputs))
 
-        reconstruction_loss *= self.size_mfcc * (self.min_mfcc_size)
+        reconstruction_loss *= self.min_mfcc_size * (self.size_mfcc)
         kl_loss = 1 + z_log_var - K.square(z_mean) - K.exp(z_log_var)
         kl_loss = K.sum(kl_loss, axis=-1)
         kl_loss *= -0.5
@@ -280,6 +331,22 @@ class CVae:
         score2 = self.vae.evaluate(self.x_test, None, verbose=1)
         print('Score', score.history)
         print('Score', score2)
+
+    def generate(self):
+        #        self.np.reshape(self.X, [1,self.X.shape[1], self.X.shape[2], 1])
+
+        self.X=np.reshape(self.X, [1,self.X.shape[1], self.X.shape[2], 1])
+        encoded = self.encoder.predict(self.X)
+        # print( "encoded", encoded)
+        #z_sample = np.array([(0, 0), (0, 0)])
+        decoded = self.decoder.predict(encoded[0])
+        final = decoded[0] # .reshape(self.number_of_data_to_extract, self.range_of_notes_to_extract, 1).astype(dtype=bool)
+        final2 = final[:, :, 0]
+        audio = librosa.feature.inverse.mfcc_to_audio(final2)
+        librosa.output.write_wav("file.wav",audio, 22050 )
+        print("final", final)
+
+        return final
 
     def save_array_data(self):
         print("Saving audio array to file")
@@ -378,16 +445,31 @@ if __name__ == '__main__':
     #vae.multiprocessed_audio_cut(30)
 
 
-    process_audio = False
-    if process_audio:
+    load = True
+
+    if load:
+        path_file="/home/kyrillos/CODE/Wavae/audios/amusique/Tech Melodique/Boris_Brejcha/Anna/[2007] Anna - Analoge Und Digitale Geschichten/01 - Anna - Analoge Und Digitale Geschichten.mp3"
+        vae.load_data_for_eval(path_file)
         vae.process_size()
-        vae.load_data()
         vae.process_data()
-        vae.save_array_data()
-    else:
-        vae.load_array_data()
-        vae.process_size()
-        vae.split_data()
         vae.compile()
-        vae.train()
-        vae.plot_results()
+        weights = "vae_5000.h5"
+        print("LOADING WEIGHTS")
+        vae.vae.load_weights(weights)
+        vae.generate()
+
+
+    else:
+        process_audio = False
+        if process_audio:
+            vae.process_size()
+            vae.load_data()
+            vae.process_data()
+            vae.save_array_data()
+        else:
+            vae.load_array_data()
+            vae.process_size()
+            vae.split_data()
+            vae.compile()
+            vae.train()
+            vae.plot_results()
